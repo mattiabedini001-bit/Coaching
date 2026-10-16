@@ -1,5 +1,5 @@
 /* Service worker: tiene in memoria l'app per aprirla anche senza rete. I dati passano sempre dallo script Google. */
-const CACHE = 'scheda-v1';
+const CACHE = 'scheda-v2';
 const ASSETS = ['./', './index.html', './app.js', './style.css', './config.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 

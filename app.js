@@ -98,7 +98,7 @@
   function ctx() {
     if (S.role === 'coach') {
       const b = S.coachBundle;
-      return { b: b, weeks: weeksOf(b), docs: (b && b.logs) || {}, readOnly: true, coach: true, current: b && b.cliente.settimanaCorrente };
+      return { b: b, weeks: weeksOf(b), docs: (b && b.logs) || {}, readOnly: !canEdit(), coach: true, current: b && b.cliente.settimanaCorrente };
     }
     const b = S.bundle;
     return { b: b, weeks: weeksOf(b), docs: S.docs, readOnly: S.readOnly, coach: false, current: b && b.cliente.settimanaCorrente };
@@ -117,16 +117,32 @@
     const firstOpen = (w.days || []).find((d) => { const doc = c.docs[w.id + '_' + d.id]; return !(doc && doc.done); });
     S.dayId = firstOpen ? firstOpen.id : (w.days && w.days[0] ? w.days[0].id : 'week');
   }
+  /* chi può scrivere: il cliente sulla sua scheda, il coach sulla scheda del cliente aperto */
+  function canEdit() {
+    if (S.role === 'cliente') return !S.readOnly;
+    return S.role === 'coach' && S.screen === 'coach-client' && !!S.coachBundle;
+  }
+  /* documenti modificabili: quelli del cliente, oppure quelli del cliente aperto dal coach */
+  function docsMap() {
+    if (S.role === 'coach') { if (!S.coachBundle.logs) S.coachBundle.logs = {}; return S.coachBundle.logs; }
+    return S.docs;
+  }
+  /* chiave di salvataggio: per il coach include il cliente (es. "alessio-b/w01_LUN") */
+  const wkey = (doc) => (S.role === 'coach' ? S.coachClient + '/' + doc : doc);
+  function splitKey(key) {
+    const i = key.indexOf('/');
+    return i < 0 ? { cliente: null, doc: key } : { cliente: key.slice(0, i), doc: key.slice(i + 1) };
+  }
   function ensureSession(w, d) {
-    const id = w + '_' + d;
-    if (!S.docs[id]) S.docs[id] = { week: w, day: d, date: '', done: false, ex: {}, painMax: null, painWhere: '', morning: '', note: '', updatedAt: '' };
-    if (!S.docs[id].ex) S.docs[id].ex = {};
-    return S.docs[id];
+    const id = w + '_' + d; const m = docsMap();
+    if (!m[id]) m[id] = { week: w, day: d, date: '', done: false, ex: {}, painMax: null, painWhere: '', morning: '', note: '', updatedAt: '' };
+    if (!m[id].ex) m[id].ex = {};
+    return m[id];
   }
   function ensureCheckin(w) {
-    const id = w + '_week';
-    if (!S.docs[id]) S.docs[id] = { week: w, day: 'week', daily: '', volley: '', nextSunday: '', video: '', note: '', updatedAt: '' };
-    return S.docs[id];
+    const id = w + '_week'; const m = docsMap();
+    if (!m[id]) m[id] = { week: w, day: 'week', daily: '', volley: '', nextSunday: '', video: '', note: '', updatedAt: '' };
+    return m[id];
   }
   function ensureEx(doc, key) { if (!doc.ex[key]) doc.ex[key] = { sets: [], done: false, note: '', extra: '' }; if (!Array.isArray(doc.ex[key].sets)) doc.ex[key].sets = []; return doc.ex[key]; }
 
@@ -177,7 +193,7 @@
     return null;
   }
 
-  /* ---------- salvataggio (cliente) ---------- */
+  /* ---------- salvataggio (cliente e coach) ---------- */
   const W = { dirty: new Set(), inflight: new Set(), timers: {}, backoff: 0 };
   function outbox() { const o = store.get(K.outbox, {}) || {}; return o[S.code] || {}; }
   function outboxSet(id, data) {
@@ -187,41 +203,85 @@
     store.set(K.outbox, o);
   }
   function touch(id) {
-    const d = S.docs[id]; if (!d) return;
+    const d = docsMap()[id]; if (!d) return;
     d.updatedAt = new Date().toISOString();
-    outboxSet(id, d);
-    W.dirty.add(id);
-    clearTimeout(W.timers[id]);
-    W.timers[id] = setTimeout(() => flush(id), 900);
+    const key = wkey(id);
+    outboxSet(key, d);
+    W.dirty.add(key);
+    clearTimeout(W.timers[key]);
+    W.timers[key] = setTimeout(() => flush(key), 900);
     renderStatus(); refreshIndicators();
+    if (S.role === 'coach') refreshSummarySoon();
   }
-  async function flush(id) {
-    if (S.role !== 'cliente' || S.readOnly) return;
-    if (W.inflight.has(id) || !W.dirty.has(id)) return;
+  async function flush(key) {
+    if (!S.role || (S.role === 'cliente' && S.readOnly)) return;
+    if (W.inflight.has(key) || !W.dirty.has(key)) return;
     if (!S.online) { renderStatus(); return; }
-    W.dirty.delete(id); W.inflight.add(id); renderStatus();
+    const k = splitKey(key);
+    // il coach salva dalla copia locale: così i dati partono anche se nel frattempo ha aperto un altro cliente
+    const data = S.role === 'coach' ? outbox()[key] : S.docs[key];
+    if (!data) { W.dirty.delete(key); renderStatus(); return; }
+    W.dirty.delete(key); W.inflight.add(key); renderStatus();
     let delay = 0;
     try {
-      const r = await api('save', { doc: id, data: clone(S.docs[id]) });
-      S.netError = false; W.backoff = 0;
-      if (r.stale && r.data && !W.dirty.has(id)) { S.docs[id] = r.data; requestRender(); }
-      if (!W.dirty.has(id)) outboxSet(id, null);
+      const r = S.role === 'coach'
+        ? await api('salva', { cliente: k.cliente, doc: k.doc, data: clone(data) })
+        : await api('save', { doc: key, data: clone(data) });
+      S.netError = false; W.backoff = 0; S.saveError = '';
+      if (r.stale && r.data && !W.dirty.has(key)) {
+        // sul server c'è una versione più recente (es. il cliente ha compilato dopo): vince quella
+        if (S.role === 'coach') { if (S.coachBundle && S.coachClient === k.cliente) { docsMap()[k.doc] = r.data; requestRender(); } }
+        else { S.docs[key] = r.data; requestRender(); }
+      }
+      if (!W.dirty.has(key)) outboxSet(key, null);
       persistCache();
     } catch (e) {
-      if (e.code === 'codice') { W.inflight.delete(id); logout('Il tuo codice non è più attivo. Chiedi un nuovo link a ' + COACH + '.'); return; }
+      if (e.code === 'codice') {
+        W.inflight.delete(key);
+        if (S.role === 'coach') logout('Codice coach non valido.');
+        else logout('Il tuo codice non è più attivo. Chiedi un nuovo link a ' + COACH + '.');
+        return;
+      }
       if (e.code === 'rete' || e.code === 'errore' || e.code === 'setup') {
-        W.dirty.add(id); S.netError = true;
+        W.dirty.add(key); S.netError = true;
         W.backoff = Math.min(W.backoff ? W.backoff * 2 : 10000, 120000); delay = W.backoff;
       } else {
         S.saveError = e.message || 'Dati non accettati.';
       }
     } finally {
-      W.inflight.delete(id);
+      W.inflight.delete(key);
       renderStatus(); renderBanner();
-      if (W.dirty.has(id)) { clearTimeout(W.timers[id]); W.timers[id] = setTimeout(() => flush(id), delay || 400); }
+      if (W.dirty.has(key)) { clearTimeout(W.timers[key]); W.timers[key] = setTimeout(() => flush(key), delay || 400); }
     }
   }
   function flushAll() { for (const id of Array.from(W.dirty)) flush(id); }
+  /* coach: riprende gli invii rimasti in sospeso (app chiusa o senza rete) */
+  function resumeCoachOutbox() {
+    Object.keys(outbox()).forEach((key, i) => { if (key.includes('/')) { W.dirty.add(key); setTimeout(() => flush(key), 600 + i * 300); } });
+  }
+  /* coach: dopo un ricaricamento, rimette sopra i dati locali non ancora inviati */
+  function mergeCoachOutbox() {
+    if (!S.coachBundle) return;
+    const pend = outbox(); const logs = docsMap(); const pre = S.coachClient + '/';
+    for (const key of Object.keys(pend)) {
+      if (!key.startsWith(pre)) continue;
+      const doc = key.slice(pre.length); const r = logs[doc];
+      if (!r || String(pend[key].updatedAt || '') > String(r.updatedAt || '')) {
+        logs[doc] = clone(pend[key]);
+        if (!W.inflight.has(key) && !W.dirty.has(key)) { W.dirty.add(key); setTimeout(() => flush(key), 600); }
+      } else if (!W.dirty.has(key) && !W.inflight.has(key)) outboxSet(key, null);
+    }
+  }
+  const coachPending = () => Array.from(W.dirty).concat(Array.from(W.inflight)).some((k) => k.includes('/'));
+  let sumTimer = null;
+  function refreshSummarySoon() {
+    clearTimeout(sumTimer);
+    sumTimer = setTimeout(() => {
+      if (S.screen !== 'coach-client') return;
+      const a = document.activeElement; if (a && a.id === 'coachText') return;
+      const c = ctx(); const w = curWeek(c); if (w) { renderSummary(c, w); renderDayTabs(c, w); }
+    }, 700);
+  }
   function mergeOutbox() {
     const pend = outbox(); const server = (S.bundle && S.bundle.logs) || {};
     for (const id of Object.keys(pend)) {
@@ -274,6 +334,7 @@
       const r = await api('cliente', { cliente: id });
       if (S.coachClient !== id) return;
       S.coachBundle = r.data; S.coachMeta = { codice: r.codice, attivo: r.attivo }; S.lastSync = new Date().toISOString();
+      mergeCoachOutbox();
       if (silent) requestRender(); else renderAll(true);
     } catch (e) { coachError(e); }
   }
@@ -361,7 +422,11 @@
     const el = $('status'); if (!el) return;
     let cls = '', txt = '';
     if (S.role === 'coach') {
-      if (!S.online) { cls = 'busy'; txt = 'Offline'; } else if (S.ui.busy) { cls = 'busy'; txt = 'Aggiorno…'; } else { cls = 'ok'; txt = 'Collegato'; }
+      const pending = coachPending();
+      if (!S.online) { cls = 'busy'; txt = pending ? 'Offline · dati sul telefono' : 'Offline'; }
+      else if (pending && S.netError) { cls = 'busy'; txt = 'Non inviato · riprovo'; }
+      else if (pending) { cls = 'busy'; txt = 'Salvataggio…'; }
+      else if (S.ui.busy) { cls = 'busy'; txt = 'Aggiorno…'; } else { cls = 'ok'; txt = S.screen === 'coach-client' && S.coachBundle ? 'Salvato' : 'Collegato'; }
     } else {
       const pending = W.dirty.size + W.inflight.size;
       if (S.readOnly) { cls = 'bad'; txt = 'Sola lettura'; }
@@ -383,6 +448,8 @@
       else if (!S.bundle) html = '<div class="banner">Caricamento del programma…</div>';
       else if (!weeksOf(S.bundle).length) html = '<div class="banner"><strong>Il programma non è ancora pronto.</strong> Appena ' + esc(COACH) + ' pubblica la settimana, la trovi qui.</div>';
       else if (S.loadError) html = '<div class="banner warn">Stai vedendo l\'ultima versione scaricata. I dati che inserisci vengono inviati quando torna la connessione.</div>';
+    } else if (S.saveError) {
+      html = '<div class="banner bad"><strong>Alcuni dati non sono stati salvati.</strong> Restano su questo dispositivo (' + esc(S.saveError) + ').</div>';
     } else if (S.ui.msg) {
       html = '<div class="banner bad">' + esc(S.ui.msg) + '</div>';
     }
@@ -517,12 +584,14 @@
   }
   function renderDay(c, w) {
     if (!w) { setHTML('dayView', ''); return; }
-    if (S.dayId === 'week') { setHTML('dayView', renderCheckin(c, w)); return; }
+    const who = c.coach && !c.readOnly ? '<div class="banner coach-edit">Stai compilando per <strong>' + esc(c.b.cliente.nome) + '</strong>: i dati finiscono nella sua scheda e li vede anche lui.' +
+      (w._stato !== 'pubblicata' ? ' Questa settimana è ancora in bozza.' : '') + '</div>' : '';
+    if (S.dayId === 'week') { setHTML('dayView', who + renderCheckin(c, w)); return; }
     const day = (w.days || []).find((d) => d.id === S.dayId);
-    setHTML('dayView', day ? renderSession(c, w, day) : '');
+    setHTML('dayView', day ? who + renderSession(c, w, day) : '');
   }
   function refreshIndicators() {
-    if (S.role !== 'cliente') return;
+    if (!canEdit()) return;
     const c = ctx(); const w = curWeek(c); if (!w) return;
     const day = (w.days || []).find((d) => d.id === S.dayId);
     if (day) {
@@ -684,7 +753,7 @@
       const r = await api('login');
       store.set(K.code, code); store.set(K.role, { code: code, role: r.role });
       S.loginError = '';
-      if (r.role === 'coach') { S.role = 'coach'; S.clienti = r.clienti; S.lastSync = new Date().toISOString(); go('coach-home'); }
+      if (r.role === 'coach') { S.role = 'coach'; S.clienti = r.clienti; S.lastSync = new Date().toISOString(); go('coach-home'); resumeCoachOutbox(); }
       else { S.role = 'cliente'; applyBundle(r.data); store.set(K.bundle, { code: code, data: r.data }); mergeOutbox(); go('client'); }
     } catch (e) {
       S.code = null;
@@ -726,8 +795,8 @@
     // coach
     if (act.startsWith('c-')) return coachAction(act, btn);
 
-    // cliente
-    if (S.role !== 'cliente' || S.readOnly) return;
+    // compilazione della scheda (cliente, o coach per conto del cliente)
+    if (!canEdit()) return;
     const c = ctx(); const w = curWeek(c); if (!w) return;
     if (act.startsWith('ci-')) {
       const ci = ensureCheckin(w.id); const f = act.slice(3); const v = btn.dataset.v;
@@ -829,7 +898,7 @@
     if (!k) return;
     if (k === 'import') { S.ui.importText = el.value; return; }
     if (k === 'coach') { clearTimeout(noteTimer.t); noteTimer.t = setTimeout(saveCoachNote, 1200); return; }
-    if (S.role !== 'cliente' || S.readOnly) return;
+    if (!canEdit()) return;
     const c = ctx(); const w = curWeek(c); if (!w) return;
     if (k === 'ci') { ensureCheckin(w.id)[el.dataset.f] = el.value; touch(w.id + '_week'); return; }
     const doc = ensureSession(w.id, S.dayId); const id = w.id + '_' + S.dayId;
@@ -853,7 +922,7 @@
   });
   setInterval(() => {
     if (document.visibilityState !== 'visible' || !S.online || isEditing()) return;
-    if (S.role === 'coach' && S.screen === 'coach-client' && !S.ui.confirm && !S.ui.importOpen && !S.ui.busy) loadCoachClient(S.coachClient, true);
+    if (S.role === 'coach' && S.screen === 'coach-client' && !S.ui.confirm && !S.ui.importOpen && !S.ui.busy && !coachPending()) loadCoachClient(S.coachClient, true);
   }, 60000);
 
   /* ---------- avvio ---------- */
@@ -866,7 +935,7 @@
     S.code = saved;
     if (!S.code) { go('login'); return; }
     const role = savedRole && savedRole.code === S.code ? savedRole.role : null;
-    if (role === 'coach') { S.role = 'coach'; go('coach-home'); refreshCoachList(); return; }
+    if (role === 'coach') { S.role = 'coach'; go('coach-home'); refreshCoachList(); resumeCoachOutbox(); return; }
     if (role === 'cliente') {
       S.role = 'cliente';
       const cached = store.get(K.bundle, null);

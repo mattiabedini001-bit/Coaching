@@ -285,3 +285,6 @@ input:disabled, textarea:disabled { opacity: 0.75; -webkit-text-fill-color: var(
   .scale { gap: 3px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
+
+/* COACH: compilazione per conto del cliente */
+.banner.coach-edit { padding: 0.6rem 1rem; font-size: 13px; border-left: 3px solid var(--color-primary); }
