@@ -574,11 +574,13 @@
   }
   function renderCheckin(c, w) {
     const ci = c.docs[w.id + '_week'] || {};
+    const cfg = (c.b && c.b.config) || {};
+    const showNextSunday = cfg.nextSunday !== false;
     return '<section class="panel" aria-label="Check-in di fine settimana"><h3>Check-in di fine settimana</h3>' +
       '<p class="hint">Serve a ' + esc(COACH) + ' per preparare la settimana successiva.</p>' +
       '<div class="field"><span class="label">Dolore nelle attività quotidiane (camminare, scale, a riposo, di notte)</span>' + segButtons(c, 'ci-daily', ci.daily || '', [['no', 'No'], ['si', 'Sì']]) + '</div>' +
       '<div class="field"><label for="ci-volley">Sport e attività della settimana</label><input type="text" autocomplete="off" placeholder="Es. 3 allenamenti + partita venerdì, tanti salti mercoledì" id="ci-volley" data-k="ci" data-f="volley" value="' + esc(ci.volley || '') + '"' + dis(c) + '></div>' +
-      '<div class="field"><span class="label">Partita la domenica della prossima settimana</span>' + segButtons(c, 'ci-nextSunday', ci.nextSunday || '', [['no', 'No'], ['si', 'Sì'], ['forse', 'Non so']]) + '</div>' +
+      (showNextSunday ? '<div class="field"><span class="label">Partita la domenica della prossima settimana</span>' + segButtons(c, 'ci-nextSunday', ci.nextSunday || '', [['no', 'No'], ['si', 'Sì'], ['forse', 'Non so']]) + '</div>' : '') +
       '<div class="field"><label for="ci-note">Note per ' + esc(COACH) + '</label><textarea rows="3" placeholder="Come ti sei sentito, cosa vuoi chiedere" id="ci-note" data-k="ci" data-f="note"' + dis(c) + '>' + esc(ci.note || '') + '</textarea></div></section>';
   }
   function renderDay(c, w) {
