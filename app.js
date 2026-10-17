@@ -141,7 +141,7 @@
   }
   function ensureCheckin(w) {
     const id = w + '_week'; const m = docsMap();
-    if (!m[id]) m[id] = { week: w, day: 'week', daily: '', volley: '', nextSunday: '', video: '', note: '', updatedAt: '' };
+    if (!m[id]) m[id] = { week: w, day: 'week', daily: '', volley: '', nextSunday: '', note: '', updatedAt: '' };
     return m[id];
   }
   function ensureEx(doc, key) { if (!doc.ex[key]) doc.ex[key] = { sets: [], done: false, note: '', extra: '' }; if (!Array.isArray(doc.ex[key].sets)) doc.ex[key].sets = []; return doc.ex[key]; }
@@ -157,7 +157,7 @@
     for (const f of (lg.fields || ['kg', 'reps'])) {
       if (lg.sides && (f === 'reps' || f === 'sec')) out.push(f + '_sx', f + '_dx'); else out.push(f);
     }
-    return out.filter((f) => FIELD_META[f]);
+    return out.filter((f) => FIELD_META[f] && f !== 'rpe' && f !== 'rir');
   }
   function exComplete(ex, entry) {
     if (!entry) return false;
@@ -575,11 +575,10 @@
   function renderCheckin(c, w) {
     const ci = c.docs[w.id + '_week'] || {};
     return '<section class="panel" aria-label="Check-in di fine settimana"><h3>Check-in di fine settimana</h3>' +
-      '<p class="hint">Serve a ' + esc(COACH) + ' per preparare la settimana successiva. Compilalo la domenica.</p>' +
+      '<p class="hint">Serve a ' + esc(COACH) + ' per preparare la settimana successiva.</p>' +
       '<div class="field"><span class="label">Dolore nelle attività quotidiane (camminare, scale, a riposo, di notte)</span>' + segButtons(c, 'ci-daily', ci.daily || '', [['no', 'No'], ['si', 'Sì']]) + '</div>' +
       '<div class="field"><label for="ci-volley">Sport e attività della settimana</label><input type="text" autocomplete="off" placeholder="Es. 3 allenamenti + partita venerdì, tanti salti mercoledì" id="ci-volley" data-k="ci" data-f="volley" value="' + esc(ci.volley || '') + '"' + dis(c) + '></div>' +
       '<div class="field"><span class="label">Partita la domenica della prossima settimana</span>' + segButtons(c, 'ci-nextSunday', ci.nextSunday || '', [['no', 'No'], ['si', 'Sì'], ['forse', 'Non so']]) + '</div>' +
-      '<div class="field"><span class="label">Video frontale di una serie</span>' + segButtons(c, 'ci-video', ci.video || '', [['si', 'Fatto'], ['no', 'Non fatto']]) + '</div>' +
       '<div class="field"><label for="ci-note">Note per ' + esc(COACH) + '</label><textarea rows="3" placeholder="Come ti sei sentito, cosa vuoi chiedere" id="ci-note" data-k="ci" data-f="note"' + dis(c) + '>' + esc(ci.note || '') + '</textarea></div></section>';
   }
   function renderDay(c, w) {
@@ -701,7 +700,6 @@
     const bits = [];
     if (ci.daily) bits.push('<span class="chip ' + (ci.daily === 'si' ? 'bad' : 'ok') + '">dolore quotidiano: ' + (ci.daily === 'si' ? 'sì' : 'no') + '</span>');
     if (ci.nextSunday) bits.push('<span class="chip ' + (ci.nextSunday === 'si' ? 'warn' : '') + '">partita domenica prossima: ' + esc({ si: 'sì', no: 'no', forse: 'non so' }[ci.nextSunday] || '') + '</span>');
-    if (ci.video) bits.push('<span class="chip">video frontale: ' + (ci.video === 'si' ? 'fatto' : 'no') + '</span>');
     setHTML('summary', '<section class="panel" aria-label="Riepilogo"><h2>Riepilogo ' + esc(w.label || w.id) + '</h2><div class="sum-rows">' + rows +
       '<div class="sum-row"><b>Check-in</b>' + (bits.join('') || '<span>non compilato</span>') + (ci.note ? '<span>' + esc(ci.note) + '</span>' : '') + '</div></div>' +
       '<div class="field"><label for="coachText">Nota per ' + esc(c.b.cliente.nome.split(' ')[0]) + ' (la vede in cima alla settimana)</label>' +
