@@ -182,13 +182,18 @@
   function previousFor(c, w, dayId, key) {
     const pubs = c.weeks.filter((x) => x._stato === 'pubblicata' || !c.coach);
     const i = pubs.findIndex((x) => x.id === w.id);
-    const prev = i > 0 ? pubs[i - 1] : (i === -1 ? pubs[pubs.length - 1] : null);
-    if (!prev || prev.id === w.id) return null;
-    const days = [dayId].concat((prev.days || []).map((d) => d.id).filter((d) => d !== dayId));
-    for (const d of days) {
-      const doc = c.docs[prev.id + '_' + d];
-      const s = doc && doc.ex && setSummary(doc.ex[key]);
-      if (s) return { week: prev, text: s };
+    // settimana aperta non tra le pubblicate (bozza del coach): si parte dall'ultima pubblicata
+    const start = i === -1 ? pubs.length - 1 : i - 1;
+    // si torna indietro una settimana alla volta finché l'esercizio non ha dati registrati
+    for (let j = start; j >= 0; j--) {
+      const prev = pubs[j];
+      if (prev.id === w.id) continue;
+      const days = [dayId].concat((prev.days || []).map((d) => d.id).filter((d) => d !== dayId));
+      for (const d of days) {
+        const doc = c.docs[prev.id + '_' + d];
+        const s = doc && doc.ex && setSummary(doc.ex[key]);
+        if (s) return { week: prev, text: s };
+      }
     }
     return null;
   }
